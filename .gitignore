@@ -1,5 +1,10 @@
 *.class
 
+# Eclipse
+.settings
+.project
+.classpath
+
 # Mobile Tools for Java (J2ME)
 .mtj.tmp/
 
@@ -17,3 +22,6 @@ manifest.mf
 build.xml
 dist/README.TXT
 /target/
+/bin/
+/out/
+/tmp/

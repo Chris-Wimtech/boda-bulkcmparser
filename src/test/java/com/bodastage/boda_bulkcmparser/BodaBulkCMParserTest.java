@@ -97,9 +97,9 @@ public class BodaBulkCMParserTest
     public void testApp()
     {
         try {
-            BodaBulkCMParser parser = new BodaBulkCMParser();
+            
             String[] args = { sampleBulkCMFile, System.getProperty("java.io.tmpdir")};
-            parser.main(args);
+            BodaBulkCMParser.main(args);
 
             for(int i=0; i<expectedFiles.length;i++){
                 boolean fileExists 

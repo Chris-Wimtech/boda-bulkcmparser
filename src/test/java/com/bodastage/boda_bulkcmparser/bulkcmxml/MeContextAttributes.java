@@ -3,7 +3,6 @@
  */
 package com.bodastage.boda_bulkcmparser.bulkcmxml;
 
-import java.util.List;
 import javax.xml.bind.annotation.XmlElement;
 
 /**
@@ -12,7 +11,7 @@ import javax.xml.bind.annotation.XmlElement;
  * @author Bodastage<info@bodastage.com>
  */
 class MeContextAttributes {
-    private String meContextId = "1";
+    
     private String dnPrefix = "www.bodastage.com";
     
     private VsDataContainer vsDataContainer = new VsDataContainer();
