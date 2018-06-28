@@ -2,7 +2,7 @@
  * 3GPP Bulk CM XML to CSV Parser.
  *
  * @author Bodastage<info@bodastage.com>
- * @version 1.0.0
+ * @version 1.3.3
  * @see http://github.com/bodastage/boda-bulkcmparsers
  */
 package com.bodastage.boda_bulkcmparser;
@@ -20,7 +20,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 
-import javax.swing.event.ListSelectionEvent;
 import javax.xml.stream.XMLEventReader;
 import javax.xml.stream.XMLInputFactory;
 import javax.xml.stream.XMLStreamConstants;
@@ -31,8 +30,6 @@ import javax.xml.stream.events.EndElement;
 import javax.xml.stream.events.StartElement;
 import javax.xml.stream.events.XMLEvent;
 
-import com.sun.xml.internal.bind.v2.runtime.unmarshaller.XsiNilLoader.Array;
-
 public class BodaBulkCMParser {
 
 
@@ -41,7 +38,7 @@ public class BodaBulkCMParser {
      *
      * Since 1.3.0
      */
-    final String VERSION = "1.3.2";
+    final String VERSION = "1.3.3";
 
     /**
      * Tracks XML elements.
@@ -266,7 +263,14 @@ public class BodaBulkCMParser {
      * @since 1.1.0
      */
     private String dataFile;
-
+    
+    /**
+     * Separation character for file redirection.
+     * 
+     * @since 1.3.3
+     */
+    private static String collideDelmitier = "_";
+    
     /**
      * The base file name of the file being parsed.
      *
@@ -361,6 +365,15 @@ public class BodaBulkCMParser {
         parameterFile = filename;
     }
 
+    private static String readOpt(String key, List<String> arguments, String def) {
+    	for (String i : arguments) {
+    		if (i.indexOf("-" + key + "=") == 0) {
+    			return i.replace("-" + key + "-", "");
+    		}
+    	}
+    	return def;
+    }
+    
     /**
      * @param args the command line arguments
      *
@@ -401,6 +414,9 @@ public class BodaBulkCMParser {
                     child.delete();
                 }
             }
+            
+            // Read collission fine name delimiter from the command-line
+            collideDelmitier = readOpt("c", arguments, collideDelmitier);
 
             //Get bulk CM XML file to parse.
             //bulkCMXMLFile = ;
@@ -1078,7 +1094,7 @@ public class BodaBulkCMParser {
                     }
                 }
 
-                f = new File(outputDirectory, mo + "_" + ++i + ".csv");
+                f = new File(outputDirectory, mo + collideDelmitier + ++i + ".csv");
             }
 
             if (i > 0) {
@@ -1368,7 +1384,7 @@ public class BodaBulkCMParser {
     public void showHelp() {
         System.out.println("boda-bulkcmparser "+ VERSION +" Copyright (c) 2018 Bodastage(http://www.bodastage.com)");
         System.out.println("Parses 3GPP Bulk CM XML to csv.");
-        System.out.println("Usage: java -jar boda-bulkcmparser.jar <fileToParse.xml|Directory> <outputDirectory> [parameter.conf]");
+        System.out.println("Usage: java -jar boda-bulkcmparser.jar <fileToParse.xml|Directory> <outputDirectory> [parameter.conf] [-D] [-c=delimiter]");
     }
 
     /**
