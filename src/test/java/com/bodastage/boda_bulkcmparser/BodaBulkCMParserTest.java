@@ -99,7 +99,7 @@ public class BodaBulkCMParserTest
         try {
             
             String[] args = { sampleBulkCMFile, System.getProperty("java.io.tmpdir")};
-            BodaBulkCMParser.main(args);
+            Main.main(args);
 
             for(int i=0; i<expectedFiles.length;i++){
                 boolean fileExists 

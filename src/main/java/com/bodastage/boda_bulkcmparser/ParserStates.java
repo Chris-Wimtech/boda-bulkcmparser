@@ -1,26 +1,19 @@
-/*
- *
- */
 package com.bodastage.boda_bulkcmparser;
 
 /**
- *
  * @author info@bodastage.com
  */
-public final class ParserStates {
-    
+public enum ParserStates {
     /**
      * Managed Object parameters extraction stage.
      */
-    public static final int EXTRACTING_PARAMETERS = 1;
-    
+    EXTRACTING_PARAMETERS,
     /**
      * Parameter value extraction stage
      */
-    public static final int EXTRACTING_VALUES = 2;
-    
+    EXTRACTING_VALUES,
     /**
      * Parsing completed
      */
-    public static final int EXTRACTING_DONE = 3;
+    EXTRACTING_DONE
 }
