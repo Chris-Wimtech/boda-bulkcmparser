@@ -76,7 +76,7 @@ public abstract class AbstractFileParser {
                     parseFile(f.getAbsolutePath());
                 } catch (Exception e) {
                     System.out.println(e.getMessage());
-                    System.out.println("Skipping file: " + baseFileName + "\n");
+                    System.out.println("Skipping file: " + getFileName() + "\n");
                 }
             }
         } else if (Files.isRegularFile(file)) {
@@ -89,7 +89,7 @@ public abstract class AbstractFileParser {
         depth = 0;
     }
     
-    public void parseFile(String inputFilename) throws FileNotFoundException, XMLStreamException, UnsupportedEncodingException {
+    protected void parseFile(String inputFilename) throws FileNotFoundException, XMLStreamException, UnsupportedEncodingException {
     	baseFileName = IOUtils.getFileBasename(inputFilename);
     	
         XMLEventReader eventReader = XMLInputFactory.newInstance().createXMLEventReader(new FileReader(inputFilename));

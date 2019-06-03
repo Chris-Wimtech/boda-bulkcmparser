@@ -18,6 +18,12 @@ public class DistinctStack<V> extends Stack<V> {
         }
 	}
 	
+	public void popIfPresent() {
+		if (!isEmpty()) {
+			pop();
+		}
+	}
+	
 	public void pushIfAbsent(V value) {
 		if (!contains(value)) {
 			push(value);

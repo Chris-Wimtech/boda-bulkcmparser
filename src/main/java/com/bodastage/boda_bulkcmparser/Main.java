@@ -16,23 +16,24 @@ public class Main {
 
             //show help
             if (args.length < 2 || arguments.contains("-h")) {
-                showHelp();
+                System.out.println("boda-bulkcmparser " + VERSION + " Copyright (c) 2018 Bodastage(http://www.bodastage.com)");
+                System.out.println("Parses 3GPP Bulk CM XML to csv.");
+                System.out.println("Usage: java -jar boda-bulkcmparser.jar <fileToParse.xml|Directory> <outputDirectory> [parameter.conf] [-D] [-c=delimiter]");
                 System.exit(1);
             }
 
-            String outputDirectory = args[1];
+            final String inputFile = args[0];
+            final String outputDirectory = args[1];
 
             //Confirm that the output directory is a directory and has write
             //privileges
             File fOutputDir = new File(outputDirectory);
             if (!fOutputDir.isDirectory()) {
-                System.err.println("ERROR: The specified output directory is not a directory!.");
-                System.exit(1);
+                throw new IllegalArgumentException("ERROR: The specified output directory is not a directory!.");
             }
 
             if (!fOutputDir.canWrite()) {
-                System.err.println("ERROR: Cannot write to output directory!");
-                System.exit(1);
+            	throw new IllegalArgumentException("ERROR: Cannot write to output directory!");
             }
 
             // Clear out the output directory
@@ -42,22 +43,22 @@ public class Main {
                 }
             }
             
-            // Read collission fine name delimiter from the command-line
+            // Read collision fine name delimiter from the command-line
             String collideDelmitier = readOpt("c", arguments, "_");
 
             //Get bulk CM XML file to parse.
             try (BodaBulkCMParser cmParser = new BodaBulkCMParser(new BulkOutputWriter(collideDelmitier, outputDirectory))) {
 
 	            if (args.length == 3 && new File(args[2]).isFile()) {
-                   cmParser.getParametersToExtract(args[2]);
+                   cmParser.loadParametersForExtraction(args[2]);
 	            }
 
 	            final long startTime = System.currentTimeMillis();
-	            cmParser.parse(args[0]);
+	            cmParser.parse(inputFile);
 	            printExecutionTime(startTime);
             }
         } catch(Exception e) {
-            System.out.println(e.getMessage());
+            e.printStackTrace();
             System.exit(1);
         }
     }
@@ -99,15 +100,6 @@ public class Main {
         }
 
         System.out.println(s);
-    }
-
-    /**
-     * Show parser help.
-     */
-    static void showHelp() {
-        System.out.println("boda-bulkcmparser " + VERSION + " Copyright (c) 2018 Bodastage(http://www.bodastage.com)");
-        System.out.println("Parses 3GPP Bulk CM XML to csv.");
-        System.out.println("Usage: java -jar boda-bulkcmparser.jar <fileToParse.xml|Directory> <outputDirectory> [parameter.conf] [-D] [-c=delimiter]");
     }
 
     private static String readOpt(String key, List<String> arguments, String def) {

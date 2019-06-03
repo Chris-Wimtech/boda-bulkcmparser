@@ -26,16 +26,74 @@ import org.eclipse.jdt.annotation.Nullable;
 public class BodaBulkCMParser extends AbstractFileParser implements Closeable {
 
     /**
-     * Tracks XML attributes per Management Objects.
+     * Multi-valued parameter separator.
      */
-    private final GrowingHashMap<Integer, Map<String, String>> xmlAttrStack = new GrowingHashMap<>(LinkedHashMap::new);
+    private static final String VALUE_SEPARATOR = ";";
+
+    /**
+     * For attributes with children, define parameter-child separator
+     */
+    private static final String CHILD_ATTRIBUTE_SEPARATOR = "_";
+    
 
     /**
      * Tracks Managed Object specific 3GPP attributes.
      *
      * This tracks everything within <xn:attributes>...</xn:attributes>.
      */
-    private final GrowingHashMap<Integer, Map<String, String>> threeGPPAttrStack = new GrowingHashMap<>(LinkedHashMap::new);
+    private final GrowingHashMap<Integer, Map<String, String>> threeGPPAttributes = new GrowingHashMap<>(LinkedHashMap::new);
+
+    /**
+     * Maps of vsDataContainer instances to vendor specific data types.
+     */
+    private final Map<String, String> vsDataContainerTypeMap = new LinkedHashMap<>();
+
+    /**
+     * vsDataTypes stack.
+     */
+    private final Map<String, String> vsDataTypes = new LinkedHashMap<>();
+    /**
+     * Real stack to push and pop vsDataType attributes.
+     *
+     * This is used to track multivalued attributes and attributes with children
+     */
+    private final DistinctStack<String> vsDataTypeAttributes = new DistinctStack<>();
+    
+    /**
+     * Real stack to push and pop xn:attributes.
+     *
+     * This is used to track multivalued attributes and attributes with children
+     */
+    private final Stack<String> xnAttributes = new Stack<>();
+    /**
+     * Tracking parameters with children under vsDataSomeMO.
+     */
+    private final Map<String, String> parentChildParameters = new LinkedHashMap<>();
+    /**
+     * Tracking parameters with children in xn:attributes.
+     */
+    private final Map<String, String> attrParentChildMap = new LinkedHashMap<>();
+
+    /**
+     * Tracks XML attributes per Management Objects.
+     */
+    private final GrowingHashMap<Integer, Map<String, String>> moAttributes = new GrowingHashMap<>(LinkedHashMap::new);
+    /**
+     * Tracks Managed Object attributes to write to file. This is dictated by
+     * the first instance of the MO found.
+     *
+     * TODO: Handle this better.
+     */
+
+    private final GrowingHashMap<String, DistinctStack<String>> moColumns = new GrowingHashMap<>(DistinctStack::new);
+    /**
+     * Tracks the IDs of the parent elements
+     */
+    private final GrowingHashMap<String, DistinctStack<String>> moColumnsParentIds = new GrowingHashMap<>(DistinctStack::new);
+    /**
+     * A map of 3GPP attributes to the 3GPP MOs
+     */
+    private final GrowingHashMap<String, DistinctStack<String>> moThreeGPPAttributes = new GrowingHashMap<>(DistinctStack::new);
 
     /**
      * Marks start of processing per MO attributes.
@@ -43,17 +101,7 @@ public class BodaBulkCMParser extends AbstractFileParser implements Closeable {
      * This is set to true when xn:attributes is encountered.
      * It's set to false when the corresponding closing tag is encountered.
      */
-    private boolean attrMarker = false;
-
-    /**
-     * Tracks the depth of VsDataContainer tags in the XML document hierarchy.
-     */
-    private int vsDCDepth = 0;
-
-    /**
-     * Maps of vsDataContainer instances to vendor specific data types.
-     */
-    private final Map<String, String> vsDataContainerTypeMap = new LinkedHashMap<>();
+    private boolean isProcessingMOAttributes = false;
 
     /**
      * Tracks current vsDataType if not null
@@ -62,89 +110,31 @@ public class BodaBulkCMParser extends AbstractFileParser implements Closeable {
     private String vsDataType = null;
 
     /**
-     * vsDataTypes stack.
-     */
-    private final Map<String, String> vsDataTypeStack = new LinkedHashMap<>();
-
-    /**
-     * Real stack to push and pop vsDataType attributes.
-     *
-     * This is used to track multivalued attributes and attributes with children
-     */
-    private final Stack<String> vsDataTypeRlStack = new Stack<>();
-
-    /**
-     * Real stack to push and pop xn:attributes.
-     *
-     * This is used to track multivalued attributes and attributes with children
-     */
-    private final Stack<String> xnAttrRlStack = new Stack<>();
-
-    /**
-     * Multi-valued parameter separator.
-     */
-    private String multiValueSeparetor = ";";
-
-    /**
-     * For attributes with children, define parameter-child separator
-     */
-    private String parentChildAttrSeperator = "_";
-
-    /**
      * Tag data.
      */
     private String tagData = "";
-
-    /**
-     * Tracking parameters with children under vsDataSomeMO.
-     */
-    private final Map<String, String> parentChildParameters = new LinkedHashMap<>();
-
-    /**
-     * Tracking parameters with children in xn:attributes.
-     */
-    private final Map<String, String> attrParentChildMap = new LinkedHashMap<>();
-
-    /**
-     * A map of MO to print writers.
-     */
-    private final BulkOutputWriter outputVsDataTypePWMap;
-
-    /**
-     * Tracks Managed Object attributes to write to file. This is dictated by
-     * the first instance of the MO found.
-     *
-     * TODO: Handle this better.
-     */
-    private final Map<String, DistinctStack<String>> moColumns = new LinkedHashMap<>();
-
-    /**
-     * Tracks the IDs of the parent elements
-     */
-    private final Map<String, DistinctStack<String>> moColumnsParentIds = new LinkedHashMap<>();
-
-    /**
-     * A map of 3GPP attributes to the 3GPP MOs
-     */
-    private final GrowingHashMap<String, DistinctStack<String>> moThreeGPPAttrMap = new GrowingHashMap<>(DistinctStack::new);
-
     private String dateTime = "";
-
-    private ParserStates parserState = ParserStates.EXTRACTING_PARAMETERS;
-
     /**
      * parameter selection file
      */
     private String parameterFile = null;
 
+    /**
+     * A map of MO to print writers.
+     */
+    private final BulkOutputWriter output;
+
+    private ParserStates currentState = ParserStates.EXTRACTING_PARAMETERS;
+
+
     public BodaBulkCMParser(BulkOutputWriter output) {
-    	outputVsDataTypePWMap = output;
+    	this.output = output;
     }
     
     /**
      * Extracts parameter list from the parameter file
      */
-    public void getParametersToExtract(String filename) throws FileNotFoundException, IOException {
+    public void loadParametersForExtraction(String filename) throws FileNotFoundException, IOException {
     	parameterFile = filename;
     	
         try (BufferedReader br = new BufferedReader(new FileReader(filename))) {
@@ -158,9 +148,9 @@ public class BodaBulkCMParser extends AbstractFileParser implements Closeable {
 
                if (mo.startsWith("vsData")) {
                     moColumns.put(mo, parameterStack);
-                    moColumnsParentIds.put(mo, new DistinctStack());
+                    moColumnsParentIds.put(mo, new DistinctStack<>());
                } else {
-                    moThreeGPPAttrMap.put(mo, parameterStack);
+                    moThreeGPPAttributes.put(mo, parameterStack);
                }
             }
 
@@ -170,16 +160,13 @@ public class BodaBulkCMParser extends AbstractFileParser implements Closeable {
     }
 
     @Override
-    public void parseFile(String inputFilename) throws FileNotFoundException, XMLStreamException, UnsupportedEncodingException {
-    	if (parserState == ParserStates.EXTRACTING_PARAMETERS) {
-            System.out.println("Extracting parameters from " + getFileName() + "...");
-        } else {
-            System.out.println("Parsing " + getFileName() + "...");
-        }
+    protected void parseFile(String inputFilename) throws FileNotFoundException, XMLStreamException, UnsupportedEncodingException {
+    	System.out.println("Boda BulkCMParser executed on file " + inputFilename);
+    	System.out.println("Stage [" + currentState + "]: Running...");
     	
         super.parseFile(inputFilename);
         
-        System.out.println("Done.");
+        System.out.println("Stage [" + currentState + "]: Completed.");
     }
 
     /**
@@ -187,16 +174,14 @@ public class BodaBulkCMParser extends AbstractFileParser implements Closeable {
      */
     @Override
     public void parse(String dataSource) throws XMLStreamException, FileNotFoundException, UnsupportedEncodingException {
-        //Extract parameters
-        if (parserState == ParserStates.EXTRACTING_PARAMETERS) {
-            super.parse(dataSource);
-            parserState = ParserStates.EXTRACTING_VALUES;
+        if (currentState == ParserStates.EXTRACTING_PARAMETERS) {
+            super.parse(dataSource);																					//Extract parameters
+            currentState = ParserStates.EXTRACTING_VALUES;
         }
 
-        //Extracting values
-        if (parserState == ParserStates.EXTRACTING_VALUES) {
-        	super.parse(dataSource);
-            parserState = ParserStates.EXTRACTING_DONE;
+        if (currentState == ParserStates.EXTRACTING_VALUES) {
+        	super.parse(dataSource);																					//Extracting values
+            currentState = ParserStates.EXTRACTING_DONE;
         }
     }
     
@@ -205,10 +190,11 @@ public class BodaBulkCMParser extends AbstractFileParser implements Closeable {
     	super.reset();
     	
         vsDataType = null;
-        vsDataTypeStack.clear();
-        vsDataTypeRlStack.clear();
-        xmlAttrStack.clear();
-        attrMarker = false;
+        vsDataTypes.clear();
+        vsDataTypeAttributes.clear();
+        moAttributes.clear();
+        
+        isProcessingMOAttributes = false;
     }
     
     @Override
@@ -218,7 +204,7 @@ public class BodaBulkCMParser extends AbstractFileParser implements Closeable {
 
         Iterator<Attribute> attributes = startElement.getAttributes();
 
-        if (qName.equals("fileFooter") && ParserStates.EXTRACTING_PARAMETERS == parserState) {
+        if ("fileFooter".equals(qName) && ParserStates.EXTRACTING_PARAMETERS == currentState) {
             while (attributes.hasNext()) {
                 Attribute attribute = attributes.next();
                 if ("dateTime".equals(attribute.getName().toString())) {
@@ -226,73 +212,64 @@ public class BodaBulkCMParser extends AbstractFileParser implements Closeable {
                 }
             }
         }
-
-        //E1:0. xn:VsDataContainer encountered
-        //Push vendor specific MOs to the xmlTagStack
-        if (qName.equalsIgnoreCase("VsDataContainer")) {
-            vsDCDepth++;
+        
+        if ("VsDataContainer".equalsIgnoreCase(qName)) {													//E1:0. xn:VsDataContainer encountered Push vendor specific MOs to the xmlTagStack
             depth++;
 
-            xmlTagStack.push("VsDataContainer_" + vsDCDepth);
+            xmlTagStack.push("VsDataContainer_" + depth);
 
             while (attributes.hasNext()) {
                 Attribute attribute = attributes.next();
                 if ("id".equals(attribute.getName().toString())) {
-                    xmlAttrStack.grow(depth).put("id", attribute.getValue());
+                    moAttributes.grow(depth).put("id", attribute.getValue());
                 }
             }
 
             vsDataType = null;
-            vsDataTypeStack.clear();
-            vsDataTypeRlStack.clear();
+            vsDataTypes.clear();
+            vsDataTypeAttributes.clear();
             return;
         }
-
-        //E1:1
-        if (!prefix.equals("xn") && qName.startsWith("vsData")) {
+        																									//E1:1
+        if (!"xn".equalsIgnoreCase(prefix) && qName.startsWith("vsData")) {
             vsDataType = qName;
-            vsDataContainerTypeMap.put("VsDataContainer_" + vsDCDepth, qName);
+            vsDataContainerTypeMap.put("VsDataContainer_" + depth, qName);
 
             return;
         }
-
-        //E1.2
+       																										//E1.2
         if (vsDataType != null) {
-            if (!vsDataTypeStack.containsKey(qName)) {
-                vsDataTypeStack.put(qName, null);
-                vsDataTypeRlStack.push(qName);
+            if (!vsDataTypes.containsKey(qName)) {
+                vsDataTypes.put(qName, null);
+                vsDataTypeAttributes.push(qName);
             }
             return;
         }
-
-        //E1.3
+        																									//E1.3
         if ("attributes".equals(qName)) {
-            attrMarker = true;
+            isProcessingMOAttributes = true;
             return;
         }
-
-        //E1.4
+    																										//E1.4
         if (xmlTagStack.contains(qName)) {
         	qName += "_" + (getXMLTagOccurences(qName) + 1);
-        } else {
-	
-	        //E1.5
-	        if (attrMarker == true && vsDataType == null) {
-	            xnAttrRlStack.push(qName);								//Tracks the hierarchy of tags under xn:attributes
-	            threeGPPAttrStack.grow(depth).putIfAbsent(qName, null); //Check if the parameter is already in the stack so we don't overwrite it.
+        } else {																							//E1.5
+	        if (isProcessingMOAttributes == true && vsDataType == null) {
+	            xnAttributes.push(qName);																	//Tracks the hierarchy of tags under xn:attributes
+	            threeGPPAttributes.grow(depth).putIfAbsent(qName, null);									//Check if the parameter is already in the stack so we don't overwrite it.
 	
 	            return;
 	        }
         }
-
-        //E1.6 - Push 3GPP Defined MOs to the xmlTagStack
+        																									//E1.6 - Push 3GPP Defined MOs to the xmlTagStack
         depth++;
         xmlTagStack.push(qName);
 
+        Map<String, String> arts = moAttributes.grow(depth);
         while (attributes.hasNext()) {
             Attribute attribute = attributes.next();
 
-            xmlAttrStack.grow(depth).put(attribute.getName().getLocalPart(), attribute.getValue());
+            arts.put(attribute.getName().getLocalPart(), attribute.getValue());
         }
     }
     
@@ -308,140 +285,115 @@ public class BodaBulkCMParser extends AbstractFileParser implements Closeable {
         final String prefix = endElement.getName().getPrefix();
         final String qName = endElement.getName().getLocalPart();
 
-        //E3:1 </xn:VsDataContainer>
-        if (qName.equalsIgnoreCase("VsDataContainer")) {
+        final boolean isVsDataContainer = "VsDataContainer".equalsIgnoreCase(qName);
+        
+        if (isVsDataContainer) {															//E3:1 - </xn:VsDataContainer>
             xmlTagStack.pop();
-            xmlAttrStack.remove(depth);
-            vsDataContainerTypeMap.remove(Integer.toString(vsDCDepth));
-            threeGPPAttrStack.remove(depth);
-            vsDCDepth--;
+            moAttributes.remove(depth);
+            vsDataContainerTypeMap.remove(Integer.toString(depth));
+            threeGPPAttributes.remove(depth);
             depth--;
             
             return;
         }
 
-        //3.2 </xn:attributes>
-        if ("attributes".equals(qName)) {
-            attrMarker = false;
+        if ("attributes".equals(qName)) {													//E3.2 - </xn:attributes>
+            isProcessingMOAttributes = false;
 
-            if (parserState == ParserStates.EXTRACTING_PARAMETERS && vsDataType == null) {
+            if (currentState == ParserStates.EXTRACTING_PARAMETERS && vsDataType == null) {
                 collectThreeGPPAttributes();
             }
             
             return;
         }
-
-        //E3:3 xx:vsData<VendorSpecificDataType>
-        if (qName.startsWith("vsData") && !"VsDataContainer".equalsIgnoreCase(qName) && !"xn".equals(prefix)) { //This skips xn:vsDataType
-
-            if (parserState == ParserStates.EXTRACTING_PARAMETERS) {
+    																						//E3:3 - xx:vsData<VendorSpecificDataType>
+        if (qName.startsWith("vsData") && !isVsDataContainer && !"xn".equals(prefix)) { 	//This skips xn:vsDataType
+            if (currentState == ParserStates.EXTRACTING_PARAMETERS) {
                 collectVendorAttributes();
             } else {
                 printVendorAttributes();
             }
 
             vsDataType = null;
-            vsDataTypeStack.clear();
+            vsDataTypes.clear();
             return;
         }
-
-        //E3:4
-        //Process parameters under <bs:vsDataSomeMO>..</bs:vsDataSomeMo>
-        if (vsDataType != null && attrMarker == true) {//We are processing vsData<DataType> attributes
-            String newTag = qName;
-            String newValue = tagData;
-
-            //Handle attributes with children
-            if (parentChildParameters.containsKey(qName)) {//End of parent tag
-
-                //Ware at the end of the parent tag so we remove the mapping
-                //as the child values have already been collected in vsDataTypeStack.
-                parentChildParameters.remove(qName);
-
-                //The top most value on the stack should be qName
-                if (vsDataTypeRlStack.size() > 0) {
-                    vsDataTypeRlStack.pop();
-                }
-
-                //Remove the parent tag from the stack so that we don't output data for it. Their values are taken care of by their children.
-                vsDataTypeStack.remove(qName);
+        																					//E3:4 - Process parameters under <bs:vsDataSomeMO>..</bs:vsDataSomeMo>
+        if (vsDataType != null && isProcessingMOAttributes == true) {						//We are processing vsData<DataType> attributes
+            																				//Handle attributes with children
+            if (parentChildParameters.containsKey(qName)) {									//End of parent tag
+                parentChildParameters.remove(qName);										//We're at the end of the parent tag so we remove the mapping as the child values have already been collected in vsDataTypeStack.
+                vsDataTypeAttributes.popIfPresent();										//The top most value on the stack should be qName
+                vsDataTypes.remove(qName);													//Remove the parent tag from the stack so that we don't output data for it. Their values are taken care of by their children.
 
                 return;
             }
 
-            //If size is greater than 1, then there is parent with children
-            if (vsDataTypeRlStack.size() > 1) {
-                int len = vsDataTypeRlStack.size();
-                String parentTag = vsDataTypeRlStack.get(len - 2);
-                newTag = parentTag + parentChildAttrSeperator + qName;
+            String newTag = qName;
+            
+            if (vsDataTypeAttributes.size() > 1) {											 //There is a parent with children
+                String parentTag = vsDataTypeAttributes.get(vsDataTypeAttributes.size() - 2);
+                
+                newTag = parentTag + CHILD_ATTRIBUTE_SEPARATOR + qName;
 
-                parentChildParameters.put(parentTag, qName);		//Store the parent and it's child
-                vsDataTypeStack.remove(qName);						//Remove this tag from the tag stack.
+                parentChildParameters.put(parentTag, qName);								//Store the parent and it's child
+                vsDataTypes.remove(qName);													//Remove this tag from the tag stack.
 
             }
 
-            // Handle multi-valued parameters
-            if (vsDataTypeStack.containsKey(newTag) && vsDataTypeStack.get(newTag) != null) {
-                newValue = vsDataTypeStack.get(newTag) + multiValueSeparetor + tagData;
-            }
+            String data = vsDataTypes.getOrDefault(newTag, null);
+            if (data == null) data = "";
+            if (!data.isEmpty()) data += VALUE_SEPARATOR;									// Handle multi-valued parameters
+            data += tagData;
 
-            // TODO: Handle cases of multi values parameters and parameters with children
-            // For now continue as if they do not exist
-            vsDataTypeStack.put(newTag, newValue);
+            // TODO: Handle cases of multi values parameters and parameters with children. For now continue as if they don't exist
+            vsDataTypes.put(newTag, data);
             tagData = "";
             
-            if (vsDataTypeRlStack.size() > 0) {
-                vsDataTypeRlStack.pop();
-            }
+            vsDataTypeAttributes.popIfPresent();
         }
 
         //E3.5
         //Process tags under xn:attributes.
-        if (attrMarker == true && vsDataType == null) {
+        if (isProcessingMOAttributes == true && vsDataType == null) {
+            Map<String, String> cMap = threeGPPAttributes.get(depth);						//Handle attributes with children. Do this when parent end tag is encountered.
 
-            Map<String, String> cMap = threeGPPAttrStack.get(depth);
-            
-            //Handle attributes with children. Do this when parent end tag is encountered.
-            if (attrParentChildMap.containsKey(qName)) {		    //End of parent tag
-                attrParentChildMap.remove(qName);					//Remove parent child map
-                xnAttrRlStack.pop();
+            if (attrParentChildMap.containsKey(qName)) {									//Remove the parent from the threeGPPAttrStack so we don't output data for it.
+                attrParentChildMap.remove(qName);
+                xnAttributes.pop();
 
-                cMap.remove(qName);									//Remove the parent from the threeGPPAttrStack so we don't output data for it.
+                cMap.remove(qName);
 
                 return;
             }
 
-            //Handle parent child attributes. Get the child value
-            String newTag = qName;
+            String newTag = qName;															//Handle parent child attributes. Get the child value
             
-            int xnAttrRlStackLen = xnAttrRlStack.size();
+            int xnAttrRlStackLen = xnAttributes.size();
             
             if (xnAttrRlStackLen > 1) {
-                String parentXnAttr = xnAttrRlStack.get(xnAttrRlStackLen - 2);
+                String parentXnAttr = xnAttributes.get(xnAttrRlStackLen - 2);
                 
-                attrParentChildMap.put(parentXnAttr, qName);		//Store parent child map
+                attrParentChildMap.put(parentXnAttr, qName);								//Store parent child map
 
-                if (cMap.containsKey(qName)) {						//Remove the child tag from the 3gpp xnAttribute stack
-                    cMap.remove(qName);
-                }
+                cMap.remove(qName);															//Remove the child tag from the 3gpp xnAttribute stack
 
-                newTag = parentXnAttr + parentChildAttrSeperator + qName;
+                newTag = parentXnAttr + CHILD_ATTRIBUTE_SEPARATOR + qName;
             }
 
-            //For multi-valued attributes, first check that the tag already exits.
-            if (cMap.containsKey(newTag) && cMap.get(newTag) != null) {
-            	cMap.put(newTag, cMap.get(newTag) + multiValueSeparetor + tagData);
-            } else {
-            	cMap.put(newTag, tagData);
-            }
-
+            String data = cMap.getOrDefault(newTag, null);									//For multi-valued attributes, first check if the tag already exits and append new ones
+            
+            if (data == null) data = "";
+            if (!data.isEmpty()) data += VALUE_SEPARATOR;
+            cMap.put(newTag, data + tagData);
+            
+            
             tagData = "";
-            xnAttrRlStack.pop();
+            xnAttributes.pop();
             return;
         }
 
-        //E3:6 - At this point, the remaining XML elements are 3GPP defined Managed Objects
-        if (xmlTagStack.contains(qName)) {
+        if (xmlTagStack.contains(qName)) {													//E3:6 - At this point, the remaining XML elements are 3GPP defined Managed Objects
             //TODO: This occurrence check does not appear to be of any use; test and remove if not needed.
         	//String theTag = qName;
             /*int occurrence = getXMLTagOccurences(qName);*/
@@ -449,13 +401,13 @@ public class BodaBulkCMParser extends AbstractFileParser implements Closeable {
             //    theTag = qName + "_" + occurrence;
             //}
 
-            if (parserState != ParserStates.EXTRACTING_PARAMETERS) {
+            if (currentState != ParserStates.EXTRACTING_PARAMETERS) {
                 print3GPPAttributes();
             }
 
             xmlTagStack.pop();
-            xmlAttrStack.remove(depth);
-            threeGPPAttrStack.remove(depth);
+            moAttributes.remove(depth);
+            threeGPPAttributes.remove(depth);
             depth--;
         }
     }
@@ -463,15 +415,12 @@ public class BodaBulkCMParser extends AbstractFileParser implements Closeable {
     /**
      * Returns 3GPP defined Managed Objects(MOs) and their attribute values.
      * This method is called at the end of processing 3GPP attributes.
-     *
-     * @version 1.0.0
-     * @since 1.0.0
      */
     private void print3GPPAttributes() {
 
-        String mo = xmlTagStack.peek().toString();
+        String mo = xmlTagStack.peek();
 
-        if (parameterFile != null && !moThreeGPPAttrMap.containsKey(mo)) {
+        if (parameterFile != null && !moThreeGPPAttributes.containsKey(mo)) {
             return;
         }
 
@@ -480,49 +429,36 @@ public class BodaBulkCMParser extends AbstractFileParser implements Closeable {
 
         Stack<String> ignoreInParameterFile = new Stack<>();
 
-        //Parent IDs
-        for (int i = 0; i < xmlTagStack.size(); i++) {
-            //The depth at each xml tag index is index+1
-            Map<String, String> pmap = xmlAttrStack.get(i + 1);
+        for (int i = 0; i < xmlTagStack.size(); i++) {															//Parent IDs
+            Map<String, String> attr = moAttributes.get(i + 1);													//The depth at each xml tag index is index+1
 
-            if (pmap == null) {
-                continue; //Skip null values
-            }
+            if (attr != null) {
+            	String parentMO = xmlTagStack.get(i);
+                																								//Iterate through the XML attribute tags for the element.
+                for (Map.Entry<String, String> entry : attr.entrySet()) {
+                    String pName = parentMO + "_" + entry.getKey();
+                    
+                    paramNames += "," + pName;
+                    paramValues += "," + CSVUtils.toCSVFormat(entry.getValue());
 
-            String parentMO = xmlTagStack.get(i);
-            
-            //Iterate through the XML attribute tags for the element.
-            for (Map.Entry<String, String> meMap : pmap.entrySet()) {
-                String pName = parentMO + "_" + meMap.getKey();
-                
-                paramNames += "," + pName;
-                paramValues += "," + CSVUtils.toCSVFormat(meMap.getValue());
-
-                ignoreInParameterFile.push(pName);
+                    ignoreInParameterFile.push(pName);
+                }
             }
         }
 
-        //Some MOs don't have 3GPP attributes e.g. the fileHeader and the fileFooter
-        if (moThreeGPPAttrMap.get(mo) != null) {
-              //Get 3GPP attributes for MO at the current depth
-              Map<String, String> current3GPPAttrs = null;
+        if (moThreeGPPAttributes.get(mo) != null) {																//Some MOs don't have 3GPP attributes e.g. the fileHeader and the fileFooter
+              Map<String, String> attrs = threeGPPAttributes.get(depth);										//Get 3GPP attributes for MO at the current depth
 
-              if (!threeGPPAttrStack.isEmpty() && threeGPPAttrStack.get(depth) != null) {
-                  current3GPPAttrs = threeGPPAttrStack.get(depth);
-              }
-
-              for (String aAttr : CSVUtils.sortedColumns(moThreeGPPAttrMap.get(mo))) {
-                  //Skip parameters listed in the parameter file that are already in the xmlTagList
-                  //Skip fileName and dateTime in the parameter file as they are added by default
-                  if (ignoreInParameterFile.contains(aAttr)
-                		  || "filename".equalsIgnoreCase(aAttr) || "vardatetime".equalsIgnoreCase(aAttr)) {
+              for (String aAttr : CSVUtils.sortedColumns(moThreeGPPAttributes.get(mo))) {
+                  if (ignoreInParameterFile.contains(aAttr)														//Skip parameters listed in the parameter file that are already in the xmlTagList
+                		  || "filename".equalsIgnoreCase(aAttr) || "vardatetime".equalsIgnoreCase(aAttr)) {		//Skip fileName and dateTime in the parameter file as they are added by default
                 	  continue;
                   }
 
                   String aValue = "";
 
-                  if (current3GPPAttrs != null && current3GPPAttrs.containsKey(aAttr)){
-                      aValue = CSVUtils.toCSVFormat(current3GPPAttrs.get(aAttr));
+                  if (attrs != null && attrs.containsKey(aAttr)){
+                      aValue = CSVUtils.toCSVFormat(attrs.get(aAttr));
                   }
 
                   paramNames += "," + aAttr;
@@ -530,20 +466,16 @@ public class BodaBulkCMParser extends AbstractFileParser implements Closeable {
               }
         }
 
-        outputVsDataTypePWMap.writeLine(mo, paramNames, paramValues);
+        output.writeLine(mo, paramNames, paramValues);
     }
 
     /**
-     * Print vendor specific attributes.
+     * Prints vendor specific attributes.
      * The vendor specific attributes start with a vendor specific namespace.
-     *
-     * @verison 1.0.0
-     * @since 1.0.0
      */
-    public void printVendorAttributes() {
-
+    private void printVendorAttributes() {
         if (parameterFile != null && !moColumns.containsKey(vsDataType)) {
-            return; //Skip if the MO is not in the parameterFile
+            return;																							//Skip if the MO is not in the parameterFile
         }
 
         String paramNames = "FileName,varDateTime";
@@ -553,17 +485,13 @@ public class BodaBulkCMParser extends AbstractFileParser implements Closeable {
 
         //Parent MO IDs
         for (int i = 0; i < xmlTagStack.size(); i++) {
+            String parentMO = xmlTagStack.get(i);															//Get the parent tag from the stack
 
-            //Get parent tag from the stack
-            String parentMO = xmlTagStack.get(i).toString();
-
-            //If the parent tag is VsDataContainer, look for the vendor specific MO in the vsDataContainer-to-vsDataType map.
             if (parentMO.startsWith("VsDataContainer")) {
-                parentMO = vsDataContainerTypeMap.get(parentMO);
+                parentMO = vsDataContainerTypeMap.get(parentMO);											//If the parent tag is VsDataContainer, look for the vendor specific MO in the vsDataContainer-to-vsDataType map.			
             }
 
-            //The depth at each XML tag in xmlTagStack is given by index+1.
-            Map<String, String> m = xmlAttrStack.get(i + 1);
+            Map<String, String> m = moAttributes.get(i + 1);												//The depth at each XML tag in xmlTagStack is given by index+1.
             
             if (m != null) {
                 for (Map.Entry<String, String> meMap : m.entrySet()) {
@@ -577,27 +505,23 @@ public class BodaBulkCMParser extends AbstractFileParser implements Closeable {
             paramValues += "," + parentIdValues.getOrDefault(pName, "");
         }
 
-        List<String> columns = CSVUtils.sortedColumns(moColumns.get(vsDataType));
-
-        //Iterate through the columns already collected
-        for (String pName : columns) {
-
-            //Skip parent parameters / parentIds listed in the parameter file
-            if ((parameterFile != null && moColumnsParentIds.get(vsDataType).contains(pName))
+        for (String pName : CSVUtils.sortedColumns(moColumns.get(vsDataType))) {							//Iterate through the columns already collected
+            if ((parameterFile != null && moColumnsParentIds.get(vsDataType).contains(pName))				//Skip parent parameters / parentIds listed in the parameter file
             		|| "FileName".equals(pName) || "varDateTime".equals(pName)) {
             	continue;
             }
 
             String pValue = "";
-            if (vsDataTypeStack.containsKey(pName)) {
-                pValue = CSVUtils.toCSVFormat(vsDataTypeStack.get(pName));
+            
+            if (vsDataTypes.containsKey(pName)) {
+                pValue = CSVUtils.toCSVFormat(vsDataTypes.get(pName));
             }
 
             paramNames += "," + pName;
             paramValues += "," + pValue;
         }
 
-        outputVsDataTypePWMap.writeLine(vsDataType, paramNames, paramValues);
+        output.writeLine(vsDataType, paramNames, paramValues);
     }
 
     /**
@@ -612,74 +536,50 @@ public class BodaBulkCMParser extends AbstractFileParser implements Closeable {
 
         String mo = xmlTagStack.peek();
 
-        //Skip 3GPP MO if it is not in the parameter file
-        if (parameterFile != null && !moThreeGPPAttrMap.containsKey(mo)) {
+        if ((parameterFile != null && !moThreeGPPAttributes.containsKey(mo))							//Skip 3GPP MO if it is not in the parameter file
+    		|| threeGPPAttributes.isEmpty()) {															//The attributes stack can be empty if the MO has no 3GPP attributes
         	return;
         }
 
-        //The attributes stack can be empty if the MO has no 3GPP attributes
-        if (threeGPPAttrStack.isEmpty() || threeGPPAttrStack.get(depth) == null) {
-            return;
-        }
-        
-        // Hold the current 3GPP attributes
-        Map<String, String> tgppAttrs = threeGPPAttrStack.get(depth);
+        Map<String, String> attrs = threeGPPAttributes.get(depth);										// Holds the current 3GPP attributes
 
-        if (tgppAttrs == null) {
+        if (attrs == null) {
         	return;
         }
         
-        //Initialize if the MO does not exist
-        DistinctStack attrs = moThreeGPPAttrMap.grow(mo);
-        
-        //Get vendor specific attributes
-        for (String parameter : tgppAttrs.keySet()) {
-            //Only add missing parameter if a paramterFile was not specified.
-            //The parameter file parameter list is our only interest in this case
-            if (parameterFile == null) {
-                attrs.pushIfAbsent(parameter);
-            }
-        }
+        if (parameterFile == null) {																	//Only add missing parameter if a paramterFile was not specified. The parameter file parameter list is our only interest in this case
+        	moThreeGPPAttributes.grow(mo).pushAll(attrs.keySet());										//Initialize if the MO does not exist
+    	}
     }
 
     /**
      * Collect parameters for vendor specific mo data
      */
     private void collectVendorAttributes(){
-
-        //If MO is not in the parameter list, then don't continue
         if (parameterFile != null && !moColumns.containsKey(vsDataType)) {
-        	return;
+        	return;																						//If MO is not in the parameter list, then don't continue
         }
 
-        if (!moColumns.containsKey(vsDataType) ) {
-            moColumns.put(vsDataType, new DistinctStack<>());
-            moColumnsParentIds.put(vsDataType, new DistinctStack<>()); //Holds parent element IDs
-        }
+        moColumns.grow(vsDataType);
 
-        //Only update the moColumns list if the parameterFile is not set else use the list provided in the parameterFile
-        if (parameterFile == null) {
-        	moColumns.get(vsDataType).pushAll(vsDataTypeStack.keySet());
+        if (parameterFile == null) {																	//Only update the moColumns list if the parameterFile is not set else use the list provided in the parameterFile
+        	moColumns.get(vsDataType).pushAll(vsDataTypes.keySet());
         }
-        
-        //Parent IDs
-        DistinctStack<String> parentIDStack = moColumnsParentIds.get(vsDataType);
+        																								//Parent IDs
+        DistinctStack<String> parentIDStack = moColumnsParentIds.grow(vsDataType);						//Holds parent element IDs
         
         for (int i = 0; i < xmlTagStack.size(); i++) {
             String parentMO = xmlTagStack.get(i);
 
-            //If the parent tag is VsDataContainer, look for the vendor specific MO in the vsDataContainer-to-vsDataType map.
-            if (parentMO.startsWith("VsDataContainer")) {
+            if (parentMO.startsWith("VsDataContainer")) {												//If the parent tag is VsDataContainer, look for the vendor specific MO in the vsDataContainer-to-vsDataType map.
                 parentMO = vsDataContainerTypeMap.get(parentMO);
             }
 
-            //The depth at each xml tag index is  index+1
-            Map<String, String> pnames = xmlAttrStack.get(i + 1);
+            Map<String, String> pnames = moAttributes.get(i + 1);
             
             if (pnames != null) {
-            	// Iterate through the XML attribute tags for the element.
-                for (String pName : pnames.keySet()) {
-                    parentIDStack.pushIfAbsent(parentMO + "_" + pName);
+                for (String pName : pnames.keySet()) {													// Iterate through the XML attribute tags for the element.
+                    parentIDStack.pushIfAbsent(parentMO + CHILD_ATTRIBUTE_SEPARATOR + pName);
                 }
             }
         }
@@ -687,6 +587,6 @@ public class BodaBulkCMParser extends AbstractFileParser implements Closeable {
 
     @Override
     public void close() throws IOException {
-    	outputVsDataTypePWMap.close();
+    	output.close();
     }
 }

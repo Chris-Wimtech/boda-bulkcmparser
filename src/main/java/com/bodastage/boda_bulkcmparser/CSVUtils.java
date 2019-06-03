@@ -8,25 +8,16 @@ import java.util.Stack;
 public class CSVUtils {
 
     /**
-     * Process given string into a format acceptable for CSV format.
-     *
-     * @since 1.0.0
-     * @param s String
-     * @return String Formated version of input string
+     * Processes the given string into a format acceptable for CSV insertion.
      */
     public static String toCSVFormat(String s) {
-        String csvValue = s;
+        boolean quote = s.contains("\"");
 
-        //Check if value contains comma
-        if (s.contains(",")) {
-            csvValue = "\"" + s + "\"";
+        if (s.contains(",") || quote) {
+	        return "\"" + (quote ? s.replace("\"", "\"\"") : s) + "\"";
         }
 
-        if (s.contains("\"")) {
-            csvValue = "\"" + s.replace("\"", "\"\"") + "\"";
-        }
-
-        return csvValue;
+        return s;
     }
 
     public static List<String> sortedColumns(Stack<String> unsorted) {
